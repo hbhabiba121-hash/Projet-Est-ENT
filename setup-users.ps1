@@ -1,26 +1,15 @@
-# setup-users.ps1
+# setup-users.ps1 - Simplified version
 Write-Host "========================================" -ForegroundColor Green
 Write-Host "Setting up EST Sale Users" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Green
 Write-Host ""
 
-# Wait for services to be ready
-Write-Host "Waiting for services to be ready..." -ForegroundColor Yellow
-Start-Sleep -Seconds 10
+Write-Host "Waiting for Keycloak to start (15 seconds)..." -ForegroundColor Yellow
+Start-Sleep -Seconds 15
 
-# Check if Keycloak is running
-try {
-    $response = Invoke-WebRequest -Uri "http://localhost:8080/health/ready" -UseBasicParsing -TimeoutSec 5
-    Write-Host "✓ Keycloak is ready" -ForegroundColor Green
-} catch {
-    Write-Host "✗ Keycloak is not ready. Make sure Docker is running." -ForegroundColor Red
-    Write-Host "Run: docker-compose up -d" -ForegroundColor Yellow
-    Read-Host "Press Enter to exit"
-    exit
-}
+Write-Host "Getting admin token..." -ForegroundColor Yellow
 
 # Get admin token
-Write-Host "Getting admin token..." -ForegroundColor Yellow
 $body = @{
     client_id = 'admin-cli'
     username = 'admin'
@@ -31,46 +20,45 @@ $body = @{
 try {
     $tokenResponse = Invoke-RestMethod -Uri 'http://localhost:8080/realms/master/protocol/openid-connect/token' -Method Post -Body $body
     $token = $tokenResponse.access_token
-    Write-Host "✓ Got admin token" -ForegroundColor Green
+    Write-Host "Got admin token successfully" -ForegroundColor Green
 } catch {
-    Write-Host "✗ Failed to get admin token" -ForegroundColor Red
-    Write-Host $_.Exception.Message
+    Write-Host "Failed to get admin token. Make sure Keycloak is running." -ForegroundColor Red
     Read-Host "Press Enter to exit"
     exit
 }
 
+Write-Host "`nCreating realm..." -ForegroundColor Yellow
+
 # Check if realm exists
-Write-Host "Checking realm..." -ForegroundColor Yellow
+$realmUrl = "http://localhost:8080/admin/realms/est-sale"
 try {
-    $realmCheck = Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/est-sale" -Method Get -Headers @{Authorization = "Bearer $token"} -ErrorAction SilentlyContinue
-    Write-Host "✓ Realm 'est-sale' already exists" -ForegroundColor Green
+    Invoke-RestMethod -Uri $realmUrl -Method Get -Headers @{Authorization = "Bearer $token"} -ErrorAction Stop
+    Write-Host "Realm already exists" -ForegroundColor Green
 } catch {
     if ($_.Exception.Response.StatusCode -eq 404) {
-        Write-Host "Creating realm 'est-sale'..." -ForegroundColor Yellow
-        $realmBody = @{
-            realm = "est-sale"
-            enabled = $true
-            displayName = "EST Sale"
-        } | ConvertTo-Json
+        $realmBody = '{"realm":"est-sale","enabled":true,"displayName":"EST Sale"}'
         Invoke-RestMethod -Uri "http://localhost:8080/admin/realms" -Method Post -Headers @{Authorization = "Bearer $token"; "Content-Type" = "application/json"} -Body $realmBody
-        Write-Host "✓ Realm created" -ForegroundColor Green
+        Write-Host "Realm created" -ForegroundColor Green
     } else {
-        Write-Host "✗ Error checking realm" -ForegroundColor Red
+        Write-Host "Error checking realm" -ForegroundColor Red
     }
 }
 
+Write-Host "`nCreating roles..." -ForegroundColor Yellow
+
 # Create roles
-Write-Host "Creating roles..." -ForegroundColor Yellow
 $roles = @("etudiant", "enseignant", "admin")
 foreach ($role in $roles) {
-    $roleBody = @{name = $role} | ConvertTo-Json
+    $roleBody = "{`"name`":`"$role`"}"
     try {
-        Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/est-sale/roles" -Method Post -Headers @{Authorization = "Bearer $token"; "Content-Type" = "application/json"} -Body $roleBody -ErrorAction SilentlyContinue
-        Write-Host "✓ Role '$role' created" -ForegroundColor Green
+        Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/est-sale/roles" -Method Post -Headers @{Authorization = "Bearer $token"; "Content-Type" = "application/json"} -Body $roleBody -ErrorAction Stop
+        Write-Host "Role '$role' created" -ForegroundColor Green
     } catch {
-        Write-Host "→ Role '$role' already exists" -ForegroundColor Yellow
+        Write-Host "Role '$role' already exists" -ForegroundColor Yellow
     }
 }
+
+Write-Host "`nCreating users..." -ForegroundColor Yellow
 
 # Function to create user
 function Create-User {
@@ -78,56 +66,60 @@ function Create-User {
     
     Write-Host "Creating user: $username..." -ForegroundColor Yellow
     
-    # Check if user already exists
-    $existingUsers = Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/est-sale/users?username=$username" -Method Get -Headers @{Authorization = "Bearer $token"}
-    if ($existingUsers.Count -gt 0) {
-        Write-Host "→ User '$username' already exists" -ForegroundColor Yellow
-        return
+    # Check if user exists
+    $checkUrl = "http://localhost:8080/admin/realms/est-sale/users?username=$username"
+    try {
+        $existing = Invoke-RestMethod -Uri $checkUrl -Method Get -Headers @{Authorization = "Bearer $token"}
+        if ($existing.Count -gt 0) {
+            Write-Host "User '$username' already exists" -ForegroundColor Yellow
+            return
+        }
+    } catch {
+        # User doesn't exist, continue
     }
     
     # Create user
-    $userBody = @{
-        username = $username
-        email = $email
-        firstName = $firstName
-        lastName = $lastName
-        enabled = $true
-        credentials = @(
-            @{
-                type = "password"
-                value = "password"
-                temporary = $false
-            }
-        )
-    } | ConvertTo-Json -Depth 3
+    $userBody = @"
+{
+    "username": "$username",
+    "email": "$email",
+    "firstName": "$firstName",
+    "lastName": "$lastName",
+    "enabled": true,
+    "credentials": [{
+        "type": "password",
+        "value": "password",
+        "temporary": false
+    }]
+}
+"@
     
     try {
         Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/est-sale/users" -Method Post -Headers @{Authorization = "Bearer $token"; "Content-Type" = "application/json"} -Body $userBody
-        Write-Host "✓ User '$username' created" -ForegroundColor Green
+        Write-Host "User '$username' created" -ForegroundColor Green
         
-        # Wait a moment for user to be available
+        # Wait a moment
         Start-Sleep -Seconds 1
         
-        # Get user ID and assign role
-        $newUser = Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/est-sale/users?username=$username" -Method Get -Headers @{Authorization = "Bearer $token"}
-        $userId = $newUser[0].id
+        # Get user ID
+        $userData = Invoke-RestMethod -Uri $checkUrl -Method Get -Headers @{Authorization = "Bearer $token"}
+        $userId = $userData[0].id
         
         # Get role ID
-        $roleInfo = Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/est-sale/roles/$role" -Method Get -Headers @{Authorization = "Bearer $token"}
-        $roleId = $roleInfo.id
+        $roleData = Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/est-sale/roles/$role" -Method Get -Headers @{Authorization = "Bearer $token"}
+        $roleId = $roleData.id
         
         # Assign role
-        $roleMapping = @(@{id = $roleId; name = $role}) | ConvertTo-Json
+        $roleMapping = "[{`"id`":`"$roleId`",`"name`":`"$role`"}]"
         Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/est-sale/users/$userId/role-mappings/realm" -Method Post -Headers @{Authorization = "Bearer $token"; "Content-Type" = "application/json"} -Body $roleMapping
-        Write-Host "✓ Role '$role' assigned to '$username'" -ForegroundColor Green
+        Write-Host "Role '$role' assigned to '$username'" -ForegroundColor Green
     } catch {
-        Write-Host "✗ Failed to create user '$username'" -ForegroundColor Red
+        Write-Host "Failed to create user '$username'" -ForegroundColor Red
         Write-Host $_.Exception.Message
     }
 }
 
-# Create users
-Write-Host "`nCreating users..." -ForegroundColor Yellow
+# Create all users
 Create-User -username "student" -email "student@est-sale.ma" -firstName "Student" -lastName "User" -role "etudiant"
 Create-User -username "teacher" -email "teacher@est-sale.ma" -firstName "Teacher" -lastName "User" -role "enseignant"
 Create-User -username "admin" -email "admin@est-sale.ma" -firstName "Admin" -lastName "User" -role "admin"
@@ -143,4 +135,4 @@ Write-Host "  Admin: admin / password" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Login at: http://localhost:3000" -ForegroundColor Yellow
 Write-Host ""
-Read-Host "Press Enter to exit"
+Read-Host "Press Enter to exit"docker-compose up -d

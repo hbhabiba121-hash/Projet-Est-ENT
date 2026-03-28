@@ -20,4 +20,4 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-pausegit rm setup-users.ps1 setup-users.bat
+pause
