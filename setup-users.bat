@@ -4,11 +4,12 @@ echo Setting up EST Sale Users
 echo ========================================
 echo.
 
-echo Waiting for services to be ready...
-timeout /t 10 /nobreak >nul
-
 echo Running PowerShell setup script...
-powershell -ExecutionPolicy Bypass -File setup-users.ps1
+echo If this fails, run PowerShell as Administrator and run:
+echo Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+echo.
+
+powershell -ExecutionPolicy Bypass -File "%~dp0setup-users.ps1"
 
 if %errorlevel% neq 0 (
     echo.
@@ -19,4 +20,4 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-pause
+pausegit rm setup-users.ps1 setup-users.bat
