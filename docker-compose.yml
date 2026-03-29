@@ -63,10 +63,10 @@ services:
       KEYCLOAK_SERVER_URL: http://keycloak:8080
       KEYCLOAK_REALM: est-sale
       KEYCLOAK_CLIENT_ID: ent-backend
-      KEYCLOAK_CLIENT_SECRET: OGvZ808YvsLXzBZs2TyiMncLxhwHki3G
+      KEYCLOAK_CLIENT_SECRET: secret123
     depends_on:
       - keycloak
-
+      
   ajout-service:
     build: ./ms2-ajout
     container_name: ent-ajout-service
